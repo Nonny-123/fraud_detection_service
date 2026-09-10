@@ -4,7 +4,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 def _require_nonblank(value: str) -> str:
     value = value.strip()
     if not value:

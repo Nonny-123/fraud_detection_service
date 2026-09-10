@@ -88,6 +88,21 @@ method returns the validated mapping consumed by `build_features`.
 probability from `0` to `1`, and the threshold used for that decision. Both
 schemas reject extra fields so malformed API payloads fail clearly.
 
+## FastAPI endpoints
+
+Start the development server from the project directory after activating the
+virtual environment:
+
+```sh
+uvicorn app.main:app --reload
+```
+
+Open `http://127.0.0.1:8000/docs` for the interactive OpenAPI documentation.
+`GET /health` returns `{"status":"ok"}` after the model has loaded. `POST
+/predict` accepts the `TransactionRequest` JSON body and returns the validated
+`PredictionResponse`. The model is loaded during application startup, so a
+missing or invalid model prevents the service from accepting requests.
+
 ## Prediction logic
 
 `app.config.Settings.from_environment()` reads `MODEL_PATH`,
