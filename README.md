@@ -76,3 +76,34 @@ excludes extra fields, including labels and event identifiers, from its output.
 The API and Kafka consumer will both import this function. Their schemas will
 validate transaction fields before feature engineering; this module does not
 load the model or perform scaling, encoding, or prediction.
+
+## Prediction logic
+
+`app.config.Settings.from_environment()` reads `MODEL_PATH`,
+`FRAUD_THRESHOLD`, and the Kafka topic settings. The default model path is
+`models/fraud_xgb_model.joblib`, and the default threshold is `0.5`. The
+threshold must be a finite number from `0` through `1`; it is an operational
+decision setting and has not been calibrated yet.
+
+`app.model.FraudModel.load(settings)` loads the joblib pipeline once. Its
+`predict(transaction)` method calls `build_features`, reads the probability
+for class `1`, and returns `is_fraud`, `fraud_probability`, and
+`threshold_used`. `load_configured_model()` caches one loaded model per model
+path and threshold, so later API requests and Kafka messages do not reload the
+model.
+
+To try a complete raw-transaction prediction:
+
+```sh
+python - <<'PY'
+from app.model import load_configured_model
+
+transaction = {
+    "step": 1, "type": "TRANSFER", "amount": 100.0,
+    "nameOrig": "C123", "nameDest": "C456",
+    "oldbalanceOrg": 500.0, "newbalanceOrig": 400.0,
+    "oldbalanceDest": 200.0, "newbalanceDest": 300.0,
+}
+print(load_configured_model().predict(transaction).as_dict())
+PY
+```
