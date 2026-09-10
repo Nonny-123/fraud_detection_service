@@ -1,0 +1,78 @@
+# Fraud detection service
+
+Stage 1 makes the existing model runnable outside its training notebook.
+Stage 2 adds shared feature engineering in `app/features.py`, following the
+application layout in `AGENT.md`.
+The project monitors completed transactions using their post-transaction balances.
+
+## Python setup
+
+Use Python 3.14.7. From this project directory:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python scripts/inspect_model.py
+```
+
+Dependencies are pinned to the versions used for successful model inspection.
+The virtual environment keeps them separate from your global Python packages.
+Run `deactivate` when finished.
+
+## Model inspection
+
+The script loads `models/fraud_xgb_model.joblib`, displays its pipeline, verifies
+its six input columns and class labels, and scores one synthetic transaction.
+The model path is resolved relative to the script, so it also works when launched
+from another directory using the script's full path and the virtual environment's
+Python executable.
+
+Expected inputs: `step`, `type`, `amount`, `transaction_type`, `net_sender`,
+and `net_receiver`. Classes are `0` (not fraud) and `1` (fraud).
+
+The pipeline contains preprocessing, SMOTE, and XGBoost. Scaling and encoding
+are already fitted inside the pipeline; SMOTE is a training step. Feature
+derivation from raw transactions is provided by `app.features.build_features`.
+
+The synthetic example should return a fraud probability of approximately
+`0.04674535`, followed by `Inspection passed`. This is an execution check,
+not a measurement of predictive accuracy. The original notebook and model
+are preserved without retraining.
+
+## Feature engineering
+
+From the project directory with the virtual environment activated, run `python`
+and try:
+
+```python
+from app.features import build_features
+
+transaction = {
+    "step": 1,
+    "type": "TRANSFER",
+    "amount": 100.0,
+    "nameOrig": "C123",
+    "nameDest": "C456",
+    "oldbalanceOrg": 500.0,
+    "newbalanceOrig": 400.0,
+    "oldbalanceDest": 200.0,
+    "newbalanceDest": 300.0,
+}
+features = build_features(transaction)
+print(features.to_dict(orient="records"))
+```
+
+This returns one row with `step=1`, `type="TRANSFER"`, `amount=100.0`,
+`transaction_type="CC"`, `net_sender=100.0`, and `net_receiver=100.0`.
+The output columns follow the saved model's expected order.
+
+`transaction_type` combines the first character of each account identifier.
+`net_sender` is the sender's old balance minus its new balance; `net_receiver`
+is the receiver's new balance minus its old balance. Negative differences are
+preserved exactly as in training. The function leaves the input unchanged and
+excludes extra fields, including labels and event identifiers, from its output.
+
+The API and Kafka consumer will both import this function. Their schemas will
+validate transaction fields before feature engineering; this module does not
+load the model or perform scaling, encoding, or prediction.
