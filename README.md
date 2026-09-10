@@ -90,12 +90,20 @@ schemas reject extra fields so malformed API payloads fail clearly.
 
 ## FastAPI endpoints
 
-Start the development server from the project directory after activating the
-virtual environment:
+Start the development server from the project root (the directory containing
+`app/`, `models/`, and `docker-compose.yml`) after activating the virtual
+environment:
 
 ```sh
-uvicorn app.main:app --reload
+cd "/Users/user/Downloads/coding/fraud_detection_service"
+source .venv/bin/activate
+python -m uvicorn app.main:app --reload
 ```
+
+Do not run `python3 main.py` from inside `app/`; that removes the project root
+from Python's import path and causes `ModuleNotFoundError: No module named
+app`. The `app.main:app` notation tells Uvicorn to import `main.py` as part of
+the `app` package.
 
 Open `http://127.0.0.1:8000/docs` for the interactive OpenAPI documentation.
 `GET /health` returns `{"status":"ok"}` after the model has loaded. `POST
