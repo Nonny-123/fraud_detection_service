@@ -77,6 +77,17 @@ The API and Kafka consumer will both import this function. Their schemas will
 validate transaction fields before feature engineering; this module does not
 load the model or perform scaling, encoding, or prediction.
 
+## API schemas
+
+`app.schemas.TransactionRequest` accepts the nine raw fields needed for a
+completed transaction and rejects unknown fields, blank account/type strings,
+negative values, non-finite numbers, and negative steps. Its `to_transaction()`
+method returns the validated mapping consumed by `build_features`.
+
+`app.schemas.PredictionResponse` defines the response contract: `is_fraud`, a
+probability from `0` to `1`, and the threshold used for that decision. Both
+schemas reject extra fields so malformed API payloads fail clearly.
+
 ## Prediction logic
 
 `app.config.Settings.from_environment()` reads `MODEL_PATH`,
