@@ -133,3 +133,39 @@ transaction = {
 print(load_configured_model().predict(transaction).as_dict())
 PY
 ```
+
+## Kafka broker
+
+Kafka provides the event stream used by the monitoring service:
+
+- A **topic** is a named append-only stream. This project uses
+  `transactions.completed` for completed transaction events and `fraud.alerts`
+  for predictions that cross the threshold.
+- A **producer** writes events to a topic. The future development producer will
+  publish completed transactions.
+- A **consumer** reads events from a topic. The future worker will consume
+  transactions, score them, and publish fraud alerts.
+
+The Compose file runs one Kafka broker in KRaft mode, so a separate Zookeeper
+container is not needed. It exposes `localhost:9092` for tools on the host and
+advertises `kafka:29092` for services inside Compose. The `kafka-init` service
+creates both required topics after the broker health check passes.
+
+Docker must be installed and running. Start the broker and initialize topics:
+
+```sh
+docker compose up -d kafka kafka-init
+docker compose ps
+docker compose logs kafka-init
+```
+
+The init logs should list `transactions.completed` and `fraud.alerts`. Check
+the topics directly from the broker container:
+
+```sh
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:29092 --list
+```
+
+Stop the broker with `docker compose down`. Add `-v` only when you intentionally
+want to delete the local Kafka data volume and start with empty topics.
