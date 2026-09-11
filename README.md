@@ -177,3 +177,19 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
 
 Stop the broker with `docker compose down`. Add `-v` only when you intentionally
 want to delete the local Kafka data volume and start with empty topics.
+
+## Kafka transaction producer
+
+With the broker running and the virtual environment activated, publish one
+validated sample completed transaction from the project root:
+
+```sh
+python -m kafka_service.producer
+```
+
+The producer uses `KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`) and
+`KAFKA_TRANSACTIONS_TOPIC` (default `transactions.completed`). It validates the
+sample using `TransactionRequest`, adds `transaction_id`, waits for Kafka's
+acknowledgement, and then closes its connection. A future consumer will read
+this event, score it through `app.model`, and publish qualifying results to
+`fraud.alerts`.
