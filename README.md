@@ -149,10 +149,10 @@ Kafka provides the event stream used by the monitoring service:
 - A **topic** is a named append-only stream. This project uses
   `transactions.completed` for completed transaction events and `fraud.alerts`
   for predictions that cross the threshold.
-- A **producer** writes events to a topic. The future development producer will
-  publish completed transactions.
-- A **consumer** reads events from a topic. The future worker will consume
-  transactions, score them, and publish fraud alerts.
+- A **producer** writes events to a topic. `kafka_service.producer` publishes
+  completed transactions for local development.
+- A **consumer** reads events from a topic. `kafka_service.consumer` consumes
+  transactions, scores them, and publishes fraud alerts.
 
 The Compose file runs one Kafka broker in KRaft mode, so a separate Zookeeper
 container is not needed. It exposes `localhost:9092` for tools on the host and
@@ -190,6 +190,43 @@ python -m kafka_service.producer
 The producer uses `KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`) and
 `KAFKA_TRANSACTIONS_TOPIC` (default `transactions.completed`). It validates the
 sample using `TransactionRequest`, adds `transaction_id`, waits for Kafka's
-acknowledgement, and then closes its connection. A future consumer will read
-this event, score it through `app.model`, and publish qualifying results to
+acknowledgement, and then closes its connection. The consumer reads this event,
+scores it through `app.model`, and publishes qualifying results to
 `fraud.alerts`.
+
+## Full Docker setup
+
+The application image contains the API, shared model code, Kafka worker, and
+saved model. Compose runs the API and consumer as separate non-root containers;
+both wait for Kafka topic initialization. Build and start the complete system:
+
+```sh
+docker compose up --build -d
+docker compose ps
+```
+
+The API is available at `http://127.0.0.1:8000/docs`. Publish the sample event
+from the host with the virtual environment active:
+
+```sh
+python -m kafka_service.producer
+docker compose logs consumer
+```
+
+The consumer commits malformed events after logging them so they do not block
+the stream. For a valid event, it publishes an alert containing
+`transaction_id`, `is_fraud`, `fraud_probability`, and `threshold_used` when
+the configured threshold is crossed, then commits the input offset. A scoring
+or alert-publication failure is left uncommitted and stops the worker so it can
+retry after restart.
+
+Inspect alerts from the broker container:
+
+```sh
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:29092 \
+  --topic fraud.alerts --from-beginning --timeout-ms 10000
+```
+
+Stop all services with `docker compose down`. Add `-v` only when you intend to
+remove Kafka's persisted local data and recreate the topics.

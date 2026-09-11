@@ -43,5 +43,41 @@ services:
       --partitions 1 --replication-factor 1 &&
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MODEL_PATH: /srv/app/models/fraud_xgb_model.joblib
+      FRAUD_THRESHOLD: ${FRAUD_THRESHOLD:-0.5}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8000:8000"
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      MODEL_PATH: /srv/app/models/fraud_xgb_model.joblib
+      FRAUD_THRESHOLD: ${FRAUD_THRESHOLD:-0.5}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    command: ["python", "-m", "kafka_service.consumer"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   kafka-data:
