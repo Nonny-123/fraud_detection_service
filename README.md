@@ -1,13 +1,63 @@
-# Fraud detection service
+# Fraud Detection Service
 
-Stage 1 makes the existing model runnable outside its training notebook.
-Stage 2 adds shared feature engineering in `app/features.py`, following the
-application layout in `AGENT.md`.
-The project monitors completed transactions using their post-transaction balances.
+Post-transaction fraud monitoring for completed financial transactions. The service derives the features expected by a trained XGBoost pipeline, returns a fraud probability through an API, and can score transaction events from Kafka to publish fraud alerts.
 
-## Python setup
+> This project supports monitoring after a transaction completes. It is not designed to block transactions before approval because its model requires post-transaction account balances.
 
-Use Python 3.14.7. From this project directory:
+## Key features
+
+- Scores completed transactions with a saved XGBoost fraud-detection pipeline.
+- Provides a FastAPI `POST /predict` endpoint and interactive OpenAPI documentation.
+- Uses one shared feature-engineering module for API and Kafka scoring.
+- Consumes `transactions.completed` events and publishes threshold-crossing predictions to `fraud.alerts`.
+- Runs the API, Kafka broker, topic initialization, and consumer locally with Docker Compose.
+- Configures the model location, fraud threshold, Kafka broker, and topics through environment variables.
+
+## Tech stack
+
+- **Language:** Python 3.14
+- **API:** FastAPI, Pydantic, Uvicorn
+- **Machine learning:** XGBoost, scikit-learn, imbalanced-learn, pandas, joblib
+- **Event streaming:** Apache Kafka in KRaft mode, aiokafka
+- **Containers:** Docker and Docker Compose
+
+## Prerequisites
+
+- Git
+- Docker Desktop with Docker Compose (recommended for the full stack)
+- Python 3.14.7 (for local development and the sample Kafka producer)
+
+The repository includes the trained model at `models/fraud_xgb_model.joblib`; no external API keys, database, or cloud account are required for local use.
+
+## Installation and setup
+
+Clone the repository and enter it:
+
+```sh
+git clone https://github.com/Nonny-123/fraud_detection_service.git
+cd fraud_detection_service
+```
+
+### Run the complete stack with Docker
+
+Build the image and start Kafka, the topic initializer, API, and consumer:
+
+```sh
+docker compose up --build -d
+docker compose ps
+```
+
+Open the interactive API documentation at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Stop the local stack when finished:
+
+```sh
+docker compose down
+```
+
+Do not use `docker compose down -v` unless you intend to delete the local Kafka data volume.
+
+### Local Python environment
+
+Use this when running the model inspection script, API without Docker, or the sample Kafka producer from your host machine:
 
 ```sh
 python3 -m venv .venv
@@ -16,39 +66,32 @@ python -m pip install -r requirements.txt
 python scripts/inspect_model.py
 ```
 
-Dependencies are pinned to the versions used for successful model inspection.
-The virtual environment keeps them separate from your global Python packages.
-Run `deactivate` when finished.
+Start the API outside Docker:
 
-## Model inspection
+```sh
+python -m uvicorn app.main:app --reload
+```
 
-The script loads `models/fraud_xgb_model.joblib`, displays its pipeline, verifies
-its six input columns and class labels, and scores one synthetic transaction.
-The model path is resolved relative to the script, so it also works when launched
-from another directory using the script's full path and the virtual environment's
-Python executable.
+## Usage
 
-Expected inputs: `step`, `type`, `amount`, `transaction_type`, `net_sender`,
-and `net_receiver`. Classes are `0` (not fraud) and `1` (fraud).
+Check that the containerized API is ready:
 
-The pipeline contains preprocessing, SMOTE, and XGBoost. Scaling and encoding
-are already fitted inside the pipeline; SMOTE is a training step. Feature
-derivation from raw transactions is provided by `app.features.build_features`.
+```sh
+curl http://127.0.0.1:8000/health
+```
 
-The synthetic example should return a fraud probability of approximately
-`0.04674535`, followed by `Inspection passed`. This is an execution check,
-not a measurement of predictive accuracy. The original notebook and model
-are preserved without retraining.
+Expected response:
 
-## Feature engineering
+```json
+{"status":"ok"}
+```
 
-From the project directory with the virtual environment activated, run `python`
-and try:
+Score one completed transaction:
 
-```python
-from app.features import build_features
-
-transaction = {
+```sh
+curl -X POST http://127.0.0.1:8000/predict \
+  -H 'content-type: application/json' \
+  -d '{
     "step": 1,
     "type": "TRANSFER",
     "amount": 100.0,
@@ -57,176 +100,89 @@ transaction = {
     "oldbalanceOrg": 500.0,
     "newbalanceOrig": 400.0,
     "oldbalanceDest": 200.0,
-    "newbalanceDest": 300.0,
+    "newbalanceDest": 300.0
+  }'
+```
+
+Example response:
+
+```json
+{
+  "is_fraud": false,
+  "fraud_probability": 0.04674535244703293,
+  "threshold_used": 0.5
 }
-features = build_features(transaction)
-print(features.to_dict(orient="records"))
 ```
 
-This returns one row with `step=1`, `type="TRANSFER"`, `amount=100.0`,
-`transaction_type="CC"`, `net_sender=100.0`, and `net_receiver=100.0`.
-The output columns follow the saved model's expected order.
-
-`transaction_type` combines the first character of each account identifier.
-`net_sender` is the sender's old balance minus its new balance; `net_receiver`
-is the receiver's new balance minus its old balance. Negative differences are
-preserved exactly as in training. The function leaves the input unchanged and
-excludes extra fields, including labels and event identifiers, from its output.
-
-The API and Kafka consumer will both import this function. Their schemas will
-validate transaction fields before feature engineering; this module does not
-load the model or perform scaling, encoding, or prediction.
-
-## API schemas
-
-`app.schemas.TransactionRequest` accepts the nine raw fields needed for a
-completed transaction and rejects unknown fields, blank account/type strings,
-negative values, non-finite numbers, and negative steps. Its `to_transaction()`
-method returns the validated mapping consumed by `build_features`.
-
-`app.schemas.PredictionResponse` defines the response contract: `is_fraud`, a
-probability from `0` to `1`, and the threshold used for that decision. Both
-schemas reject extra fields so malformed API payloads fail clearly.
-
-## FastAPI endpoints
-
-Start the development server from the project root (the directory containing
-`app/`, `models/`, and `docker-compose.yml`) after activating the virtual
-environment:
-
-```sh
-cd "/Users/user/Downloads/coding/fraud_detection_service"
-source .venv/bin/activate
-python -m uvicorn app.main:app --reload
-```
-
-Do not run `python3 main.py` from inside `app/`; that removes the project root
-from Python's import path and causes `ModuleNotFoundError: No module named
-app`. The `app.main:app` notation tells Uvicorn to import `main.py` as part of
-the `app` package.
-
-Open `http://127.0.0.1:8000/docs` for the interactive OpenAPI documentation.
-`GET /health` returns `{"status":"ok"}` after the model has loaded. `POST
-/predict` accepts the `TransactionRequest` JSON body and returns the validated
-`PredictionResponse`. The model is loaded during application startup, so a
-missing or invalid model prevents the service from accepting requests.
-
-## Prediction logic
-
-`app.config.Settings.from_environment()` reads `MODEL_PATH`,
-`FRAUD_THRESHOLD`, and the Kafka topic settings. The default model path is
-`models/fraud_xgb_model.joblib`, and the default threshold is `0.5`. The
-threshold must be a finite number from `0` through `1`; it is an operational
-decision setting and has not been calibrated yet.
-
-`app.model.FraudModel.load(settings)` loads the joblib pipeline once. Its
-`predict(transaction)` method calls `build_features`, reads the probability
-for class `1`, and returns `is_fraud`, `fraud_probability`, and
-`threshold_used`. `load_configured_model()` caches one loaded model per model
-path and threshold, so later API requests and Kafka messages do not reload the
-model.
-
-To try a complete raw-transaction prediction:
-
-```sh
-python - <<'PY'
-from app.model import load_configured_model
-
-transaction = {
-    "step": 1, "type": "TRANSFER", "amount": 100.0,
-    "nameOrig": "C123", "nameDest": "C456",
-    "oldbalanceOrg": 500.0, "newbalanceOrig": 400.0,
-    "oldbalanceDest": 200.0, "newbalanceDest": 300.0,
-}
-print(load_configured_model().predict(transaction).as_dict())
-PY
-```
-
-## Kafka broker
-
-Kafka provides the event stream used by the monitoring service:
-
-- A **topic** is a named append-only stream. This project uses
-  `transactions.completed` for completed transaction events and `fraud.alerts`
-  for predictions that cross the threshold.
-- A **producer** writes events to a topic. `kafka_service.producer` publishes
-  completed transactions for local development.
-- A **consumer** reads events from a topic. `kafka_service.consumer` consumes
-  transactions, scores them, and publishes fraud alerts.
-
-The Compose file runs one Kafka broker in KRaft mode, so a separate Zookeeper
-container is not needed. It exposes `localhost:9092` for tools on the host and
-advertises `kafka:29092` for services inside Compose. The `kafka-init` service
-creates both required topics after the broker health check passes.
-
-Docker must be installed and running. Start the broker and initialize topics:
-
-```sh
-docker compose up -d kafka kafka-init
-docker compose ps
-docker compose logs kafka-init
-```
-
-The init logs should list `transactions.completed` and `fraud.alerts`. Check
-the topics directly from the broker container:
-
-```sh
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:29092 --list
-```
-
-Stop the broker with `docker compose down`. Add `-v` only when you intentionally
-want to delete the local Kafka data volume and start with empty topics.
-
-## Kafka transaction producer
-
-With the broker running and the virtual environment activated, publish one
-validated sample completed transaction from the project root:
-
-```sh
-python -m kafka_service.producer
-```
-
-The producer uses `KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`) and
-`KAFKA_TRANSACTIONS_TOPIC` (default `transactions.completed`). It validates the
-sample using `TransactionRequest`, adds `transaction_id`, waits for Kafka's
-acknowledgement, and then closes its connection. The consumer reads this event,
-scores it through `app.model`, and publishes qualifying results to
-`fraud.alerts`.
-
-## Full Docker setup
-
-The application image contains the API, shared model code, Kafka worker, and
-saved model. Compose runs the API and consumer as separate non-root containers;
-both wait for Kafka topic initialization. Build and start the complete system:
-
-```sh
-docker compose up --build -d
-docker compose ps
-```
-
-The API is available at `http://127.0.0.1:8000/docs`. Publish the sample event
-from the host with the virtual environment active:
+To publish the included sample event to Kafka, ensure the Docker stack is running, activate the virtual environment, then run:
 
 ```sh
 python -m kafka_service.producer
 docker compose logs consumer
 ```
 
-The consumer commits malformed events after logging them so they do not block
-the stream. For a valid event, it publishes an alert containing
-`transaction_id`, `is_fraud`, `fraud_probability`, and `threshold_used` when
-the configured threshold is crossed, then commits the input offset. A scoring
-or alert-publication failure is left uncommitted and stops the worker so it can
-retry after restart.
+## Architecture
 
-Inspect alerts from the broker container:
-
-```sh
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:29092 \
-  --topic fraud.alerts --from-beginning --timeout-ms 10000
+```text
+                 ┌───────────────────────┐
+                 │ Completed transaction │
+                 └──────────┬────────────┘
+                            │
+              ┌─────────────┴──────────────┐
+              ▼                            ▼
+  ┌──────────────────────┐     ┌────────────────────────────────┐
+  │ FastAPI POST /predict │     │ Kafka: transactions.completed  │
+  └──────────┬───────────┘     └───────────────┬────────────────┘
+             │                                 │
+             ▼                                 ▼
+  ┌──────────────────────┐     ┌────────────────────────────────┐
+  │ Shared feature       │◄────│ Kafka consumer                 │
+  │ engineering          │     └───────────────┬────────────────┘
+  └──────────┬───────────┘                     │
+             │                                 ▼
+             ▼                    ┌──────────────────────────────┐
+  ┌──────────────────────┐        │ XGBoost model pipeline       │
+  │ JSON prediction      │        └───────────────┬──────────────┘
+  └──────────────────────┘                        │ threshold crossed
+                                                   ▼
+                                    ┌──────────────────────────────┐
+                                    │ Kafka: fraud.alerts          │
+                                    └──────────────────────────────┘
 ```
 
-Stop all services with `docker compose down`. Add `-v` only when you intend to
-remove Kafka's persisted local data and recreate the topics.
+The shared feature module derives `transaction_type`, `net_sender`, and `net_receiver` before prediction. Scaling and encoding are already stored inside the trained pipeline.
+
+## Environment variables
+
+| Variable | Purpose | Default | Required |
+| --- | --- | --- | --- |
+| `MODEL_PATH` | Path to the saved joblib model. | `models/fraud_xgb_model.joblib` locally; `/srv/app/models/fraud_xgb_model.joblib` in Compose | No |
+| `FRAUD_THRESHOLD` | Probability from `0` to `1` used to classify an event as fraud. | `0.5` | No |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address. | `localhost:9092` locally; `kafka:29092` in Compose | No |
+| `KAFKA_TRANSACTIONS_TOPIC` | Topic consumed for completed transactions. | `transactions.completed` | No |
+| `KAFKA_ALERTS_TOPIC` | Topic that receives fraud alerts. | `fraud.alerts` | No |
+
+`FRAUD_THRESHOLD=0.5` is an operational default, not a calibrated business threshold. The current model is intended to surface transactions for investigation and may generate false positives.
+
+## API reference
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Returns `{"status":"ok"}` after the model loads. |
+| `POST` | `/predict` | Scores one validated completed transaction. |
+
+`POST /predict` requires `step`, `type`, `amount`, `nameOrig`, `nameDest`, `oldbalanceOrg`, `newbalanceOrig`, `oldbalanceDest`, and `newbalanceDest`. Numeric amounts and balances must be non-negative; account identifiers and transaction type must not be blank. Unknown fields are rejected.
+
+For a complete interactive schema and response documentation, run the API and open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+
+## Contributing
+
+1. Fork the repository and create a focused branch.
+2. Make and manually verify your change locally with Docker Compose.
+3. Open a pull request that explains the change, its validation, and any configuration impact.
+
+Please do not commit secrets, local environment files, generated Kafka data, or a replacement model without documenting its training and evaluation.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
